@@ -32,8 +32,10 @@ BASE_PATH = os.environ.get("WATERSHEDS_BASE_PATH", "/watersheds").rstrip("/")
 class Edge:
     """Strip BASE_PATH from incoming paths and note the caller's address for the rate limits.
 
-    Behind Vercel's rewrite and the Cloudflare tunnel the left-most X-Forwarded-For entry
-    is the visitor (Vercel sets it, Cloudflare appends its own hop)."""
+    Through www.aeholbrook.com (Vercel's rewrite, then the Cloudflare tunnel) the visitor is
+    X-Vercel-Forwarded-For and CF-Connecting-IP is Vercel. Straight to the tunnel hostname
+    the visitor is CF-Connecting-IP. X-Forwarded-For starts with whatever the client sent,
+    so it isn't used."""
 
     def __init__(self, app):
         self.app = app
@@ -45,7 +47,7 @@ class Edge:
                 path = path[len(BASE_PATH):] or "/"
                 scope = {**scope, "path": path, "raw_path": path.encode()}
             headers = dict(scope["headers"])
-            ip = (headers.get(b"x-forwarded-for", b"").split(b",")[0].strip()
+            ip = (headers.get(b"x-vercel-forwarded-for", b"").split(b",")[0].strip()
                   or headers.get(b"cf-connecting-ip", b"").strip())
             jobs.client_ip.set(ip.decode() if ip else (scope.get("client") or ("?",))[0])
         await self.app(scope, receive, send)

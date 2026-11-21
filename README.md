@@ -52,5 +52,6 @@ Keep it to one uvicorn worker: in-flight lookups and rate limits live in the pro
 Cloudflare ends a request after 100 s and some lookups take longer, so each lookup runs
 as a task keyed by its URL. A request waits up to 20 s and then answers `202`; the
 browser asks again with the same URL and picks up the same task (`backend/app/jobs.py`).
-New lookups count against a per-visitor budget (left-most `X-Forwarded-For`), and the
+New lookups count against a per-visitor budget (`X-Vercel-Forwarded-For` behind the
+Vercel rewrite, else `CF-Connecting-IP`), and the
 CPU-heavy ones share a small global queue. Nominatim requests are paced to 1/s.
