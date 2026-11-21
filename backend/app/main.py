@@ -116,6 +116,7 @@ async def downstream(lon: float, lat: float):
     drop = await usgs.entry_point(lon, lat)
     entry = drop["entry"]
     route = await usgs.downstream(entry["comid"], entry.get("measure"), drop["entry_flowline"])
+    entry = {**entry, "stream": usgs.entry_name(entry, route)}
     return {"entry": entry, **route, "approximate": drop.get("approximate")}
 
 

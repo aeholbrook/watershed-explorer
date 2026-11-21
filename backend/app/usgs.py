@@ -192,7 +192,21 @@ async def flowline_attrs(comids: list[int], fields: list[str] | None = None) -> 
 
 def _clean_name(name: str | None) -> str | None:
     name = (name or "").strip()
-    return name or None
+    # NLDI's raindrop trace reports an unnamed flowline as the string "none".
+    return None if name.lower() in ("", "none", "null") else name
+
+
+def entry_name(entry: dict, route: dict) -> str | None:
+    """The stream the raindrop enters; an unnamed one is described by the first named
+    stream it flows into ("an unnamed tributary of Sugar Creek")."""
+    if entry.get("stream"):
+        return entry["stream"]
+    for s in route.get("segments", []):
+        name = s["name"]
+        if not s.get("gap") and name and name != "Unnamed tributary":
+            the = "the " if name.endswith(" River") and not name.startswith("The ") else ""
+            return f"an unnamed tributary of {the}{name}"
+    return None
 
 
 async def nhdplus_catchment(lon: float, lat: float) -> dict | None:
