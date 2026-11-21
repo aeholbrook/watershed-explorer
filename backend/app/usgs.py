@@ -17,8 +17,8 @@ import re
 from typing import Any
 
 from shapely import make_valid
-from shapely.geometry import MultiPolygon, mapping, shape
-from shapely.ops import unary_union
+from shapely.geometry import LineString, MultiPolygon, Point, mapping, shape
+from shapely.ops import substring, unary_union
 
 from . import geo
 from .http import UpstreamError, fetch_json
@@ -173,7 +173,7 @@ async def flowline_attrs(comids: list[int], fields: list[str] | None = None) -> 
     """NHDPlus V2 value-added attributes for many flowlines, without geometry."""
     fields = fields or ["comid", "gnis_name", "lengthkm", "hydroseq", "streamorde", "maxelevsmo",
                         "minelevsmo", "ve_ma", "vc_ma", "qe_ma", "pathtimema", "totdasqkm",
-                        "terminalfl", "ftype", "reachcode"]
+                        "terminalfl", "terminalpa", "ftype", "reachcode"]
     out: dict[int, dict] = {}
     chunks = [comids[i:i + 400] for i in range(0, len(comids), 400)]
     results = await asyncio.gather(*[
@@ -348,9 +348,75 @@ async def flowtrace(lon: float, lat: float) -> dict:
     }
 
 
+async def _flowline(comid: int) -> dict | None:
+    data = await fetch_json(WFS, form={
+        "service": "WFS", "version": "2.0.0", "request": "GetFeature",
+        "typeNames": "wmadata:nhdflowline_network", "outputFormat": "application/json",
+        "srsName": "EPSG:4326", "propertyName": "comid,gnis_name,reachcode,terminalpa,minelevsmo,the_geom",
+        "cql_filter": f"comid={comid}",
+    })
+    feats = data.get("features") or []
+    return feats[0] if feats else None
+
+
+def _nearest_on(geometry: dict, lon: float, lat: float) -> tuple[list[float], float, dict]:
+    """The point of a flowline nearest lon/lat, its NHDPlus measure (percent of the reach still
+    to go; flowlines are digitized downstream) and the part of the line below it."""
+    line = LineString(_coords(geometry))
+    d = line.project(Point(lon, lat))
+    at = line.interpolate(d)
+    below = substring(line, d, line.length)
+    if below.geom_type != "LineString":   # entry at the very end of the reach
+        below = LineString([at, at])
+    measure = 100 * (1 - d / line.length) if line.length else 0.0
+    return [round(at.x, 6), round(at.y, 6)], measure, mapping(below)
+
+
+async def entry_point(lon: float, lat: float) -> dict:
+    """Where the raindrop meets the stream network: NLDI's raindrop trace when it works.
+
+    The trace fails for whole areas (in St. Louis: Forest Park, the zoo, the riverfront), so
+    then the route starts from the stream of the NHDPlus catchment the point is in, reached
+    in a straight line."""
+    try:
+        return await flowtrace(lon, lat)
+    except UpstreamError as e:
+        failure = e
+    try:
+        comid = await comid_at(lon, lat)
+        fl = await _flowline(comid)
+    except UpstreamError:
+        raise failure from None
+    if not fl:
+        raise failure
+    props = fl["properties"]
+    note = ("USGS's raindrop trace has no answer for this spot, so the route starts at the stream of "
+            "the catchment it's in, joined by a straight line.")
+    hop = await _bridge(props, [lon, lat]) if await _dead_end(props) else None
+    if hop:
+        # This catchment's stream goes underground and never reaches the sea on the map, so
+        # skip it and join the nearest lower stream that does.
+        comid, at, measure, below = hop["comid"], hop["at"], hop["measure"], hop["entry_line"]
+        props = (await flowline_attrs([comid], ["comid", "gnis_name", "reachcode"])).get(comid, {})
+        note = ("The stream here runs underground (in a sewer or culvert USGS doesn't map), so the "
+                "route joins the nearest lower stream that reaches the sea, in a straight line.")
+    else:
+        at, measure, below = _nearest_on(fl["geometry"], lon, lat)
+    return {
+        "path": {"type": "LineString", "coordinates": [[lon, lat], at]},
+        "path_m": geo.haversine_m((lon, lat), at),
+        "entry": {
+            "lon": at[0], "lat": at[1], "comid": comid, "stream": _clean_name(props.get("gnis_name")),
+            "reachcode": props.get("reachcode"), "measure": measure,
+        },
+        "entry_flowline": below,
+        "approximate": note,
+    }
+
+
 async def raindrop(lon: float, lat: float) -> dict:
     """Flow trace plus the area that drains to the same stream entry point."""
-    ft = await flowtrace(lon, lat)
+    ft = await entry_point(lon, lat)
     entry = ft["entry"]
     attrs = (await flowline_attrs([entry["comid"]], ["comid", "totdasqkm"])).get(entry["comid"], {})
     full = (attrs.get("totdasqkm") or 0) <= FULL_UPSTREAM_MAX_KM2
@@ -409,7 +475,7 @@ def _coords(geometry: dict) -> list[list[float]]:
     return [c for part in geometry["coordinates"] for c in part]
 
 
-async def downstream(comid: int, measure: float | None, entry_line: dict | None) -> dict:
+async def _route(comid: int, measure: float | None, entry_line: dict | None) -> dict:
     nav = await fetch_json(f"{NLDI}/linked-data/comid/{comid}/navigation/DM/flowlines",
                            params={"distance": 9999, "f": "json"})
     geoms = {int(f["properties"]["nhdplus_comid"]): f["geometry"] for f in nav.get("features", [])}
@@ -481,7 +547,120 @@ async def downstream(comid: int, measure: float | None, entry_line: dict | None)
         "profile": profile,
         "outlet": _outlet(last, end),
         "totals": {"length_km": round(km, 2), "hours": round(hours, 1), "reach_count": len(ids)},
+        "_last": last,
     }
+
+
+# Some networks dead-end where a stream goes underground (St. Louis' River Des Peres
+# disappears into a sewer tunnel under Forest Park). The route then jumps, in a straight
+# line, to the nearest lower flowline of a network that does reach the sea, and says so.
+GAP_SEARCH_DEG = (0.02, 0.05, 0.1)     # ~2, 5 and 10 km
+PIPE_SPEED_MS = 1.0                     # assumed for the unmapped stretch
+MAX_HOPS = 3
+
+
+async def _dead_end(props: dict) -> bool:
+    """Does this flowline's network end above sea level (a stream that goes underground)?"""
+    if not props.get("terminalpa"):
+        return False
+    data = await fetch_json(WFS, form={
+        "service": "WFS", "version": "2.0.0", "request": "GetFeature",
+        "typeNames": "wmadata:nhdflowline_network", "outputFormat": "application/json",
+        "propertyName": "hydroseq,minelevsmo", "cql_filter": f"hydroseq={int(props['terminalpa'])}",
+    })
+    feats = data.get("features") or []
+    return bool(feats) and (feats[0]["properties"].get("minelevsmo") or 0) >= 300
+
+
+async def _bridge(last: dict, end: list[float]) -> dict | None:
+    fields = "comid,terminalpa,maxelevsmo,the_geom"
+    for d in GAP_SEARCH_DEG:
+        data = await fetch_json(WFS, form={
+            "service": "WFS", "version": "2.0.0", "request": "GetFeature",
+            "typeNames": "wmadata:nhdflowline_network", "outputFormat": "application/json",
+            "srsName": "EPSG:4326", "propertyName": fields,
+            "bbox": f"{end[1] - d},{end[0] - d},{end[1] + d},{end[0] + d},urn:ogc:def:crs:EPSG::4326",
+        })
+        feats = [f for f in data.get("features", [])
+                 if f["properties"].get("terminalpa") and f["properties"]["terminalpa"] != last.get("terminalpa")
+                 and (f["properties"].get("maxelevsmo") or 0) <= (last.get("minelevsmo") or 0)]
+        if not feats:
+            continue
+        # Only networks whose own outlet is at sea level.
+        paths = sorted({int(f["properties"]["terminalpa"]) for f in feats})
+        outs = await fetch_json(WFS, form={
+            "service": "WFS", "version": "2.0.0", "request": "GetFeature",
+            "typeNames": "wmadata:nhdflowline_network", "outputFormat": "application/json",
+            "propertyName": "hydroseq,minelevsmo",
+            "cql_filter": "hydroseq IN (%s)" % ",".join(map(str, paths)),
+        })
+        sea = {int(o["properties"]["hydroseq"]) for o in outs.get("features", [])
+               if o["properties"].get("minelevsmo") is not None and o["properties"]["minelevsmo"] < 300}
+        feats = [f for f in feats if int(f["properties"]["terminalpa"]) in sea]
+        if feats:
+            here = Point(end)
+            best = min(feats, key=lambda f: shape(f["geometry"]).distance(here))
+            at, measure, below = _nearest_on(best["geometry"], end[0], end[1])
+            return {"comid": int(best["properties"]["comid"]), "measure": measure, "entry_line": below, "at": at}
+    return None
+
+
+def _join(route: dict, at: list[float], nxt: dict) -> dict:
+    """route, then a straight unmapped stretch to `at`, then nxt."""
+    start = [route["outlet"]["lon"], route["outlet"]["lat"]]
+    gap_km = geo.haversine_m(start, at) / 1000
+    gap_h = gap_km * 1000 / PIPE_SPEED_MS / 3600
+    km0, h0 = route["totals"]["length_km"], route["totals"]["hours"]
+    top = route["outlet"]["elev_m"]
+    bottom = nxt["profile"][0][1] if nxt["profile"] else top
+    seg_i = len(route["segments"])
+    gap_seg = {
+        "name": "Underground (not in the USGS stream map)", "gap": True,
+        "start_km": round(km0, 3), "end_km": round(km0 + gap_km, 3), "length_km": round(gap_km, 3),
+        "start_hours": round(h0, 3), "end_hours": round(h0 + gap_h, 3), "hours": round(gap_h, 2),
+        "start_elev_m": top, "end_elev_m": bottom, "drop_m": round(top - bottom, 1),
+        "max_order": 0, "reach_count": 0, "end_comid": None, "end_da_km2": None, "end_flow_cms": 0,
+    }
+    gap_reach = {
+        "type": "Feature", "geometry": {"type": "LineString", "coordinates": [start, at]},
+        "properties": {"comid": 0, "name": gap_seg["name"], "seg": seg_i, "order": 1, "gap": True,
+                       "start_km": round(km0, 3), "length_km": round(gap_km, 3), "hours": round(h0, 2),
+                       "flow_cms": 0, "da_km2": None},
+    }
+    off_km, off_h = km0 + gap_km, h0 + gap_h
+    reaches = []
+    for f in nxt["reaches"]["features"]:
+        pr = f["properties"]
+        reaches.append({**f, "properties": {**pr, "seg": pr["seg"] + seg_i + 1,
+                                            "start_km": round(pr["start_km"] + off_km, 3),
+                                            "hours": round(pr["hours"] + off_h, 2)}})
+    segments = [{**s, "start_km": round(s["start_km"] + off_km, 3), "end_km": round(s["end_km"] + off_km, 3),
+                 "start_hours": round(s["start_hours"] + off_h, 3), "end_hours": round(s["end_hours"] + off_h, 3)}
+                for s in nxt["segments"]]
+    t = nxt["totals"]
+    return {
+        "reaches": {"type": "FeatureCollection",
+                    "features": route["reaches"]["features"] + [gap_reach] + reaches},
+        "segments": route["segments"] + [gap_seg] + segments,
+        "profile": route["profile"] + [[round(p[0] + off_km, 3), *p[1:]] for p in nxt["profile"]],
+        "outlet": nxt["outlet"],
+        "totals": {"length_km": round(off_km + t["length_km"], 2), "hours": round(off_h + t["hours"], 1),
+                   "reach_count": route["totals"]["reach_count"] + t["reach_count"]},
+        "_last": nxt["_last"],
+    }
+
+
+async def downstream(comid: int, measure: float | None, entry_line: dict | None) -> dict:
+    route = await _route(comid, measure, entry_line)
+    for _ in range(MAX_HOPS):
+        if route["outlet"]["kind"] != "terminal":
+            break
+        hop = await _bridge(route["_last"], [route["outlet"]["lon"], route["outlet"]["lat"]])
+        if hop is None:
+            break
+        route = _join(route, hop["at"], await _route(hop["comid"], hop["measure"], hop["entry_line"]))
+    route.pop("_last")
+    return route
 
 
 # --------------------------------------------------------------------------- upstream basin

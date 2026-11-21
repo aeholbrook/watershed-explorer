@@ -39,6 +39,8 @@ export type Raindrop = {
   entry: Entry;
   entry_flowline: Geometry;
   drains_to_entry: Unit | null;
+  /** Set when USGS's raindrop trace failed and the entry point is the app's estimate. */
+  approximate?: string | null;
 };
 
 export type Segment = {
@@ -52,7 +54,9 @@ export type Segment = {
   start_elev_m: number;
   end_elev_m: number;
   drop_m: number;
-  end_comid: number;
+  /** A straight, unmapped stretch (a stream that goes underground) bridged by the app. */
+  gap?: boolean;
+  end_comid: number | null;
   end_da_km2: number | null;
   end_flow_cms: number;
   max_order: number;
@@ -61,6 +65,7 @@ export type Segment = {
 
 export type ReachProps = {
   comid: number;
+  gap?: boolean;
   name: string;
   seg: number;
   order: number;
@@ -79,6 +84,7 @@ export type Downstream = {
   profile: [number, number, number, number][];
   outlet: LngLat & { name: string; kind: "sea" | "terminal"; elev_m: number };
   totals: { length_km: number; hours: number; reach_count: number };
+  approximate?: string | null;
 };
 
 export type Pond = LngLat & { depth_m: number; area_m2: number; sink: boolean };

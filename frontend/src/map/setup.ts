@@ -188,6 +188,8 @@ export function addLayers(map: MapLibreMap) {
     paint: {
       "line-color": ["case", ["boolean", ["get", "focus"], false], WATER_DARK, WATER],
       "line-width": orderWidth,
+      // Unmapped underground stretches the app bridged in a straight line.
+      "line-dasharray": ["case", ["boolean", ["get", "gap"], false], ["literal", [1.5, 1.5]], ["literal", [1, 0]]],
     },
   });
   below({

@@ -111,10 +111,10 @@ async def raindrop(lon: float, lat: float):
 async def downstream(lon: float, lat: float):
     """Raindrop entry point, then the whole route to the outlet."""
     _lonlat(lon, lat)
-    drop = await usgs.flowtrace(lon, lat)
+    drop = await usgs.entry_point(lon, lat)
     entry = drop["entry"]
     route = await usgs.downstream(entry["comid"], entry.get("measure"), drop["entry_flowline"])
-    return {"entry": entry, **route}
+    return {"entry": entry, **route, "approximate": drop.get("approximate")}
 
 
 @app.get("/api/below")
@@ -137,7 +137,7 @@ async def life(lon: float, lat: float):
     _lonlat(lon, lat)
     ds = None
     try:
-        ft = await usgs.flowtrace(lon, lat)
+        ft = await usgs.entry_point(lon, lat)
         ds = await usgs.downstream(ft["entry"]["comid"], ft["entry"].get("measure"), ft["entry_flowline"])
     except UpstreamError:
         pass  # species lists still work without the route

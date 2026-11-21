@@ -340,7 +340,16 @@ export default function App() {
                         )}
                       </div>
                     </li>
-                    {D.segments.map((s, i) => (
+                    {D.segments.map((s, i) => s.gap ? (
+                      <li key={i} className="route-step">
+                        <span className="key key-gap" />
+                        <div>
+                          <div className="route-name">{s.name}</div>
+                          <div className="route-meta">about {km(s.length_km)} in a straight line · {duration(s.hours)} assumed</div>
+                          <div className="route-note">The mapped stream ends here. It most likely continues in a sewer or culvert, so this stretch is a guess.</div>
+                        </div>
+                      </li>
+                    ) : (
                       <li key={i} className={`route-step ${focusSeg === i ? "on" : ""}`}>
                         <span className="key" style={{ background: WATER, height: Math.min(8, 2 + s.max_order * 0.6) }} />
                         <div>
@@ -348,7 +357,7 @@ export default function App() {
                           <div className="route-meta">
                             {km(s.length_km)} · {duration(s.hours)} · drops {elev(s.drop_m)} · mean flow at end {flow(s.end_flow_cms)}
                           </div>
-                          <button className="link small" onClick={() => showBasin(s.end_comid, i)}>
+                          <button className="link small" onClick={() => s.end_comid && showBasin(s.end_comid, i)}>
                             Show everything that drains here{s.end_da_km2 ? ` (${area(s.end_da_km2)})` : ""}
                           </button>
                         </div>
@@ -362,6 +371,7 @@ export default function App() {
                       </div>
                     </li>
                   </ol>
+                  {D.approximate && <p className="route-note">{D.approximate}</p>}
                   {basin.state === "loading" && <p className="loading small">Delineating the upstream basin…</p>}
                   {basin.state === "ok" && (
                     <p className="basin-note">

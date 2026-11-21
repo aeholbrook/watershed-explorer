@@ -295,7 +295,7 @@ async def monitoring(huc12_code: str) -> dict | None:
 async def flows(lon: float, lat: float) -> dict:
     units = await usgs.hierarchy(lon, lat)
     huc12 = next((u for u in units if u["level"] == "huc12"), None)
-    ft = await _quiet(usgs.flowtrace(lon, lat))
+    ft = await _quiet(usgs.entry_point(lon, lat))
     entry = ft["entry"] if ft else None
     # Where your water joins the big river: the last reach of the first segment with a
     # large drainage area, so the river's nutrient load and sources can be shown.
