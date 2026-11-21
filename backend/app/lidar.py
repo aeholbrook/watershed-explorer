@@ -29,6 +29,7 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.parse import urlencode
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -112,18 +113,25 @@ class Grid:
             "noData": NODATA, "interpolation": "RSP_BilinearInterpolation", "f": "json",
         }
         last: Exception | None = None
+        raw = None
         # The export link occasionally 504s; asking for a fresh export usually works.
-        for attempt in range(4):
+        for attempt in range(3):
             if attempt:
                 time.sleep(2 * attempt)
             meta = fetch_json_sync(f"{DEP}/exportImage", params=params, ttl=0)
             try:
-                raw = fetch_bytes_sync(meta["href"], expect=b"II*\x00", retries=2)
+                raw = fetch_bytes_sync(meta["href"], expect=b"II*\x00", retries=1)
                 break
             except UpstreamError as e:
                 last = e
-        else:
-            raise last or UpstreamError("3DEP", "export failed")
+        if raw is None:
+            # Some tiles get the same, long-gone output link on every export ("Invalid URL");
+            # the image itself still comes straight from exportImage (which is flakier, hence second).
+            try:
+                raw = fetch_bytes_sync(f"{DEP}/exportImage?" + urlencode({**params, "f": "image"}),
+                                       expect=b"II*\x00", retries=2)
+            except UpstreamError:
+                raise last or UpstreamError("3DEP", "export failed") from None
         arr = np.asarray(Image.open(io.BytesIO(raw)), dtype=np.float32)
         if arr.shape != (TILE, TILE):
             raise UpstreamError("3DEP", f"unexpected tile shape {arr.shape}")
