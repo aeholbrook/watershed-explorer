@@ -1,5 +1,5 @@
 import type { Map as MapLibreMap } from "maplibre-gl";
-import { OVERLAND, WATER } from "../palette";
+import { THEMES, type Mode } from "../palette";
 import { setData } from "./setup";
 
 export type RideFrame = {
@@ -162,10 +162,11 @@ export function ride(
     const { i, t } = locate(plan, d);
     const mprog = (mk[i] + (mk[Math.min(i + 1, mk.length - 1)] - mk[i]) * t) / mTotal;
     const overlandProg = mk[locate(plan, L0).i] / mTotal;
+    const T = THEMES[(document.documentElement.dataset.theme as Mode) === "dark" ? "dark" : "light"];
     map.setPaintProperty("route-trail", "line-gradient",
       mprog <= overlandProg
-        ? ["step", ["line-progress"], OVERLAND, Math.max(mprog, 1e-6), "rgba(0,0,0,0)"]
-        : ["step", ["line-progress"], OVERLAND, overlandProg, WATER, Math.max(mprog, overlandProg + 1e-6), "rgba(0,0,0,0)"]);
+        ? ["step", ["line-progress"], T.overland, Math.max(mprog, 1e-6), "rgba(0,0,0,0)"]
+        : ["step", ["line-progress"], T.overland, overlandProg, T.water, Math.max(mprog, overlandProg + 1e-6), "rgba(0,0,0,0)"]);
     setData(map, "drop", { type: "Feature", properties: {}, geometry: { type: "Point", coordinates: p } });
 
     const done = d >= total - 1e-6;

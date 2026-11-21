@@ -1,6 +1,9 @@
 import { useMemo, useRef, useState } from "react";
 import { elev, km as fmtKm } from "../format";
-import { INK, WATER } from "../palette";
+import { CSS } from "../palette";
+
+const INK = CSS.ink;
+const WATER = CSS.water;
 
 export type ProfilePoint = { km: number; elev: number; lon: number; lat: number; segment: string };
 export type ProfileMark = { km: number; label: string };

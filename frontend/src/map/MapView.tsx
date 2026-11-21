@@ -4,11 +4,11 @@ import type { Map as MapLibreMap, MapGeoJSONFeature, RasterTileSource } from "ma
 import "maplibre-gl/dist/maplibre-gl.css";
 import { api } from "../api";
 import { area } from "../format";
-import { LEVEL_COLOR, LEVEL_NAME, LEVEL_ORDER, LEVEL_WIDTH, WATER, WATER_DARK } from "../palette";
+import { LEVEL_NAME, LEVEL_ORDER, LEVEL_WIDTH, THEMES, type Mode } from "../palette";
 import type {
   Basemap, Basin, BelowGround, Downstream, FlowsData, GhostStreams, LevelKey, PlaceData, RestoreData, LidarTrace, LngLat, Raindrop, Unit,
 } from "../types";
-import { SKY, TAB_LAYERS, addLayers, animateFlow, createMap, setData, setOverlay } from "./setup";
+import { TAB_LAYERS, addLayers, animateFlow, applyTheme, createMap, setData, setOverlay, sky } from "./setup";
 import { classAt, classesInView, tileUrl, type KoppenClass } from "./koppen";
 import type { Overlay } from "../components/RestoreTab";
 
@@ -43,6 +43,7 @@ type Props = {
   onReady: (map: MapLibreMap) => void;
   onContextStatus: (s: ContextStatus) => void;
   koppenPath: string | null;
+  theme: Mode;
   onExplore: (level: LevelKey | null) => void;
   onKoppenView: (classes: (KoppenClass & { share: number })[]) => void;
 };
@@ -85,7 +86,7 @@ export function MapView(p: Props) {
     mapRef.current = map;
     let stopFlow = () => {};
     map.on("load", () => {
-      addLayers(map);
+      addLayers(map, latest.current.theme);
       stopFlow = animateFlow(map);
       setReady(true);
       latest.current.onReady(map);
@@ -223,7 +224,6 @@ export function MapView(p: Props) {
         geometry: u.geometry,
         properties: {
           level: u.level,
-          color: LEVEL_COLOR[u.level],
           width: LEVEL_WIDTH[u.level],
           selected: u.level === p.selected,
           emphasis: u.level === emphasis,
@@ -281,11 +281,11 @@ export function MapView(p: Props) {
       features: [
         {
           type: "Feature", geometry: { type: "Point", coordinates: [ds.entry.lon, ds.entry.lat] },
-          properties: { label: `Enters ${ds.entry.stream ?? "a stream"}`, color: WATER },
+          properties: { label: `Enters ${ds.entry.stream ?? "a stream"}`, kind: "entry" },
         },
         {
           type: "Feature", geometry: { type: "Point", coordinates: [ds.outlet.lon, ds.outlet.lat] },
-          properties: { label: ds.outlet.name, color: WATER_DARK },
+          properties: { label: ds.outlet.name, kind: "outlet" },
         },
       ],
     });
@@ -374,7 +374,7 @@ export function MapView(p: Props) {
   useEffect(() => {
     if (!map) return;
     const national = p.explore && NATIONAL.includes(p.explore);
-    for (const id of ["national-fill", "national-line", "national-labels"]) {
+    for (const id of ["national-fill", "national-hatch", "national-line", "national-labels"]) {
       map.setLayoutProperty(id, "visibility", national ? "visible" : "none");
     }
     if (national) {
@@ -413,9 +413,8 @@ export function MapView(p: Props) {
       latest.current.onContextStatus({ loading: true, count: 0, tooFarOut: false });
       api.context(level, [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()], map.getZoom(), ctrl.signal)
         .then((fc) => {
-          const color = LEVEL_COLOR[level];
           setData(map, "context", {
-            ...fc, features: fc.features.map((f) => ({ ...f, properties: { ...f.properties, color } })),
+            ...fc, features: fc.features.map((f) => ({ ...f, properties: { ...f.properties, level } })),
           });
           setData(map, "context-labels", {
             type: "FeatureCollection",
@@ -448,7 +447,7 @@ export function MapView(p: Props) {
     // With climate colours on, watersheds become outlines so both stay readable.
     map.setPaintProperty("national-fill", "fill-opacity",
       path ? ["case", ["boolean", ["feature-state", "hover"], false], 0.18, 0] : ["case", ["boolean", ["feature-state", "hover"], false], 0.58, 0.32]);
-    map.setPaintProperty("national-line", "line-color", path ? "#0b0b0b" : "#ffffff");
+    map.setPaintProperty("national-line", "line-color", path ? "#0b0b0b" : THEMES[p.theme].regionLine);
     map.setPaintProperty("national-line", "line-opacity", path ? 0.55 : 0.95);
     if (!path) {
       latest.current.onKoppenView([]);
@@ -466,7 +465,14 @@ export function MapView(p: Props) {
     update();
     map.on("moveend", update);
     return () => { map.off("moveend", update); };
-  }, [map, p.koppenPath]);
+  }, [map, p.koppenPath, p.theme]);
+
+  // ------------------------------------------------------------------ light / dark
+  useEffect(() => {
+    if (!map) return;
+    applyTheme(map, p.theme);
+    if (map.getTerrain()) map.setSky(sky(p.theme) as never);
+  }, [map, p.theme]);
 
   // ------------------------------------------------------------------ basemap, overlays, 2D/3D
   useEffect(() => {
@@ -485,7 +491,7 @@ export function MapView(p: Props) {
     if (!map) return;
     if (p.view === "3d") {
       map.setTerrain({ source: "terrain-dem", exaggeration: latest.current.exaggeration });
-      map.setSky(SKY as never);
+      map.setSky(sky(latest.current.theme) as never);
       if (!latest.current.riding) map.easeTo({ pitch: 62, bearing: map.getBearing() || -18, duration: 1200 });
     } else {
       map.setTerrain(null);

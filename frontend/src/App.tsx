@@ -6,7 +6,8 @@ import { KOPPEN_PERIODS, SCENARIOS, periodPath, type KoppenClass, type ScenarioI
 import { area, duration, elev, flow, km, metres } from "./format";
 import { MapView, type ContextStatus } from "./map/MapView";
 import { cumulativeKm, ride, type RideFrame, type RidePlan } from "./map/ride";
-import { LEVEL_COLOR, LEVEL_NAME, LEVEL_ORDER, OVERLAND, WATER } from "./palette";
+import { CSS, LEVEL_NAME, LEVEL_ORDER } from "./palette";
+import { useTheme } from "./theme";
 import { Profile, type ProfileMark, type ProfilePoint } from "./components/Profile";
 import { BelowGround } from "./components/BelowGround";
 import { PlaceTab } from "./components/PlaceTab";
@@ -41,6 +42,7 @@ export default function App() {
   const [explore, setExplore] = useState<LevelKey | null>(null);
   const [view, setView] = useState<"2d" | "3d">("2d");
   const [basemap, setBasemap] = useState<Basemap>("map");
+  const [themePref, setThemePref, mode] = useTheme();
   const [exaggeration, setExaggeration] = useState(3);
   const [wbdOverlay, setWbdOverlay] = useState(false);
   const [focusSeg, setFocusSeg] = useState<number | null>(null);
@@ -295,7 +297,7 @@ export default function App() {
                       onFocus={() => setHovered(u.level)}
                       onBlur={() => setHovered(null)}
                     >
-                      <span className="swatch" style={{ borderColor: LEVEL_COLOR[u.level] }} />
+                      <span className="swatch" style={{ borderColor: CSS.level(u.level) }} />
                       <span className="level-text">
                         <span className="level-kind">{LEVEL_NAME[u.level]}</span>
                         <span className="level-name">{u.name ?? "Unnamed"}</span>
@@ -325,7 +327,7 @@ export default function App() {
                 <>
                   <ol className="route">
                     <li className="route-step">
-                      <span className="key key-overland" style={{ background: OVERLAND }} />
+                      <span className="key key-overland" style={{ background: CSS.overland }} />
                       <div>
                         <div className="route-name">Over the ground to {D.entry.stream ?? "the nearest stream"}</div>
                         <div className="route-meta">
@@ -351,7 +353,7 @@ export default function App() {
                       </li>
                     ) : (
                       <li key={i} className={`route-step ${focusSeg === i ? "on" : ""}`}>
-                        <span className="key" style={{ background: WATER, height: Math.min(8, 2 + s.max_order * 0.6) }} />
+                        <span className="key" style={{ background: CSS.water, height: Math.min(8, 2 + s.max_order * 0.6) }} />
                         <div>
                           <div className="route-name">{s.name}</div>
                           <div className="route-meta">
@@ -507,6 +509,7 @@ export default function App() {
           koppenPath={koppenPath}
           onExplore={setExplore}
           onKoppenView={setClimateView}
+          theme={mode}
         />
 
         <div className="controls" role="group" aria-label="Map controls">
@@ -530,6 +533,14 @@ export default function App() {
               <input type="range" min={1} max={12} step={0.5} value={exaggeration} onChange={(e) => setExaggeration(parseFloat(e.target.value))} />
             </label>
           )}
+          <div className="seg" role="radiogroup" aria-label="Colour theme">
+            {([["auto", "Auto"], ["light", "Light"], ["dark", "Dark"]] as const).map(([v, label]) => (
+              <button key={v} role="radio" aria-checked={themePref === v} className={themePref === v ? "on" : ""} onClick={() => setThemePref(v)}
+                title={v === "auto" ? "Follow your system setting" : `${label} theme`}>
+                {label}
+              </button>
+            ))}
+          </div>
           <label className="control-row">
             <span>Watersheds</span>
             <select value={explore ?? ""} onChange={(e) => setExplore((e.target.value || null) as LevelKey | null)}>

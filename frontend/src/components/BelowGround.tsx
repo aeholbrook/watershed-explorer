@@ -1,5 +1,7 @@
 import type { BelowGround as Data } from "../types";
-import { OVERLAND, SOAK } from "../palette";
+import { CSS } from "../palette";
+
+const { overland: OVERLAND, soak: SOAK } = CSS;
 
 const SOIL_GROUP: Record<string, string> = {
   A: "A — sandy, water soaks in fast",
