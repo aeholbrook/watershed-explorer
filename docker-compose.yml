@@ -1,0 +1,10 @@
+# Local run of the production image: http://localhost:8765/watersheds/
+services:
+  watersheds:
+    build: .
+    ports: ["127.0.0.1:8765:8765"]
+    environment:
+      ARCGIS_API_KEY: ${ARCGIS_API_KEY:-}
+    volumes:
+      - ./backend/cache:/app/backend/cache
+      - ./backend/data:/app/backend/sparrow:ro
